@@ -1,0 +1,121 @@
+from selenium import webdriver
+from selenium.webdriver.chrome.service import Service as ChromeService
+from webdriver_manager.chrome import ChromeDriverManager
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.common.keys import Keys
+from selenium.common.exceptions import TimeoutException
+import time
+import csv
+import pandas as pd
+from selenium.webdriver import ActionChains
+
+# Read the origin and destination latlong from the CSV file
+file_path = 'C:/Users/Desktop/Sachin_Sharma-9034283082.csv'
+data = pd.read_csv(file_path)
+
+# Initialize iteration counter
+iteration = 1
+
+# Initialize the driver variable
+driver = None
+
+# Iterate over each row in the DataFrame
+for index, row in data.iterrows():
+    # Check if it's time to restart the driver
+    if (iteration - 1) % 5 == 0:
+        # Close the previous driver, if exists
+        if driver:
+            driver.quit()
+
+        # Restart the Selenium webdriver
+        chrome_version = "91.0.4472.101"  # Replace this with the version that matches your Chrome browser
+        driver = webdriver.Chrome(executable_path=f"chromedriver_{chrome_version}")
+        
+       # driver = webdriver.Chrome(service=ChromeService(ChromeDriverManager().install()))
+        driver.get('https://tollguru.com/toll-calculator-india')  # Open the website
+        time.sleep(5)
+
+    # Extract the origin and destination latlong from the current row
+    origin_latlong = f"{row['Origin Lat']},{row['Origin Long']}"
+    dest_latlong = f"{row['Destination Lat']},{row['Destination Long']}"
+
+    # Find and enter the origin latlong
+    origin_latlong_input = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.CSS_SELECTOR, 'input[placeholder="Enter address or long press on the map"]')))
+    origin_latlong_input.clear()  # Clear any existing value
+    origin_latlong_input.send_keys(origin_latlong + Keys.TAB)
+
+    time.sleep(2)
+
+    # Find and enter the destination latlong (automatically moves to the next input field)
+    dest_latlong_input = driver.switch_to.active_element
+    dest_latlong_input.clear()  # Clear any existing value
+    dest_latlong_input.send_keys(dest_latlong)
+
+    time.sleep(2)
+    dropdown_toggle = WebDriverWait(driver, 2).until(EC.presence_of_element_located((By.XPATH, '//img[@src="https://cdn.tollguru.com/github/Asia/2AxlesAuto.png"]')))
+    actions = ActionChains(driver)
+    actions.move_to_element(dropdown_toggle).perform()
+    driver.execute_script("arguments[0].click();", dropdown_toggle)
+    time.sleep(2)
+    actions.send_keys(Keys.ARROW_DOWN).perform()
+
+   
+# Press the Tab key to navigate through the options
+    for _ in range(3):  # Replace 3 with the desired number of times to press Tab
+     actions.send_keys(Keys.ARROW_DOWN).perform()
+     actions.send_keys(Keys.ARROW_DOWN).perform()
+     actions.send_keys(Keys.ARROW_RIGHT).perform()
+     time.sleep(2)
+     actions.send_keys(Keys.TAB).perform()
+    
+    try:
+        # Wait for the submit button to be clickable
+        submit_button = WebDriverWait(driver, 10).until(EC.element_to_be_clickable((By.CSS_SELECTOR, 'button.btn.btn-primary.btn-block.ng-tns-c155-0')))
+        submit_button.click()
+        time.sleep(10)
+
+        # Wait for the result to be visible
+        result_element = WebDriverWait(driver, 10).until(EC.visibility_of_element_located((By.CSS_SELECTOR, 'div.tooltip.tooltip-lg')))
+
+        # Fetch the fuel costs
+        fuel_elements = driver.find_elements(By.CSS_SELECTOR, 'td.ng-tns-c155-0')
+        fuel_costs = [element.text for element in fuel_elements]
+        fuel_costs = [cost for cost in fuel_costs if cost != ""]
+        fuel_costs = [cost.replace('₹', '').replace(',', '') for cost in fuel_costs]
+
+        # Check if fuel costs are available
+        if fuel_costs:
+            # Update the DataFrame with the new data
+            data.at[index, 'Origin LatLong'] = origin_latlong
+            data.at[index, 'Destination LatLong'] = dest_latlong
+            data.at[index, 'Tolls'] = fuel_costs[0]
+            data.at[index, 'Diesel'] = fuel_costs[1]
+            data.at[index, 'Total'] = fuel_costs[2]
+        else:
+            # No fuel costs available, enter 0
+            data.at[index, 'Tolls'] = 0
+            data.at[index, 'Diesel'] = 0
+            data.at[index, 'Total'] = 0
+
+    except TimeoutException:
+        print(f"Timeout occurred for iteration {iteration}, moving to next iteration.")
+
+        # Close the current driver
+        driver.quit()
+
+        # Increment the iteration counter
+        iteration += 1
+        continue
+
+    # Save the updated DataFrame to the same CSV file after every 5 iterations
+    if iteration % 5 == 0 or iteration == len(data):
+        data.to_csv(file_path, index=False)
+
+    # Increment the iteration counter
+    iteration += 1
+
+# Close the final driver
+if driver:
+    driver.quit()
